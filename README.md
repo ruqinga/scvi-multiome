@@ -1,5 +1,12 @@
 # scvi-multiome
-Snakemake Workflow for using SCVI on scMultiome Datasets
+This repo was created to process single-cell multiome (RNA + ATAC) data using Scanpy and Seurat. It represents an end-to-end workflow that will ingest counts and use scvi and poissonvi to produce a joint representation of the data using the muon implementation of weighted-nearest neighbors (WNN). Fragment counts for the ATAC data are generated using the Signac package in R. It is recommended that users correct for ambient RNA using tools such as SoupX or CellBender prior to running the pipeline. Workflow is managed using Snakemake and Anaconda environments are described using yaml files. Links to pacakges and tools used are below:
+
+scvi: https://docs.scvi-tools.org/en/stable/index.html
+scanpy: https://scanpy.readthedocs.io/en/stable/index.html
+muon: https://muon.readthedocs.io/en/latest/index.html
+seurat: https://satijalab.org/seurat/
+signac: https://stuartlab.org/signac/
+
 
 
 ### scVI
