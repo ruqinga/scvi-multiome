@@ -1,0 +1,78 @@
+# ============================================================
+# scvi-multiome Pipeline Configuration
+# ============================================================
+# Edit the sections below to match your environment.
+# See config/README_CONFIG.md for detailed documentation.
+
+# ------------------------------------------------------------
+# 1. Reference Genome
+# ------------------------------------------------------------
+reference_genome: "mm10"   # Active genome: mm10 | mm39 | hg38
+
+genomes:
+  mm10:
+    fasta: "/public/slst/home/leixy2023/database/mm10/mm10.fa"
+    chrom_sizes: "/public/slst/home/leixy2023/database/mm10/mm10.chrom.sizes"
+    gtf: "/public/slst/home/leixy2023/database/mm10/gencode.vM25.annotation_remove_miRNA_snoRNA_snRNA.gtf"
+
+  mm39:
+    fasta: "/public/slst/home/leixy2023/database/mm39/mm39.fa"
+    chrom_sizes: "/public/slst/home/leixy2023/database/mm39/mm39.chrom.sizes"
+    gtf: "/public/slst/home/leixy2023/database/mm39/gencode.vM32.annotation.gtf"
+
+  hg38:
+    fasta: "/public/slst/home/leixy2023/database/hg38/hg38.fa"
+    chrom_sizes: "/public/slst/home/leixy2023/database/hg38/hg38.chrom.sizes"
+    gtf: "/public/slst/home/leixy2023/database/hg38/gencode.v44.annotation.gtf"
+
+# ------------------------------------------------------------
+# 2. Sample Information
+# ------------------------------------------------------------
+samples_csv: "config/samples.csv"   # Path to the samples table
+
+# ------------------------------------------------------------
+# 3. Conda Environments
+# ------------------------------------------------------------
+# Use existing environment names (not .yml file paths).
+envs:
+  python: "pytorch"       # scanpy, scvi-tools, muon, anndata, pysam
+  r: "R"                  # Seurat, Signac, SeuratDisk
+  bigwig: "base-omics"    # deeptools (bamCoverage), samtools
+  workflow: "snakemake_env"
+
+# ------------------------------------------------------------
+# 4. Cell-type Annotation
+# ------------------------------------------------------------
+# The workflow will auto-detect the cell-type column from
+# your h5mu file.  Supported column names (tried in order):
+#   cell_type, celltype, annotation, leiden_celltype, leiden
+#
+# If your column is named differently, set it explicitly:
+#   celltype_column: "my_column"
+# Leave as null to enable auto-detection.
+celltype_column: null
+
+# ------------------------------------------------------------
+# 5. WNN / Input Paths
+# ------------------------------------------------------------
+wnn_muon_object: "workflows/wnn/objects/04_muon_object.h5mu"
+rna_anndata: "workflows/wnn/objects/02_anndata_object_rna.h5ad"
+# ATAC fragments path template — {sample_id} will be replaced
+atac_fragments_template: "workflows/atac/output/{sample_id}_fragments.bed"
+
+# ------------------------------------------------------------
+# 6. BigWig Generation Parameters
+# ------------------------------------------------------------
+bigwig:
+  normalization: "RPGC"     # RPGC | RPKM | CPM | BPM | None
+  bin_size: 50              # bp per bin
+  min_mapping_quality: 20
+  extra_bamcoverage_params: ""   # e.g. "--ignoreDuplicates --extendReads"
+
+# ------------------------------------------------------------
+# 7. Output Directories
+# ------------------------------------------------------------
+output:
+  rna_bigwig: "Results/rna"
+  atac_bigwig: "Results/atac"
+  intermediate: "workflows/generate_bigwig/intermediate"
