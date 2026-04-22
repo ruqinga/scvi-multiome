@@ -1,130 +1,179 @@
 # scvi-multiome
 
-An end-to-end Snakemake pipeline for processing and integrating single-cell multiome (RNA + ATAC) data using scVI, PoissonVI, and weighted-nearest neighbors (WNN).
+An end-to-end Snakemake pipeline for processing and integrating single-cell
+multiome (RNA + ATAC) data — from raw FASTQ files to per-cell-type BigWig
+tracks — using scVI, PoissonVI, and weighted-nearest neighbors (WNN).
 
-## Overview
+## Complete Data Flow
 
-This pipeline provides a complete workflow for analyzing single-cell multiome datasets, combining gene expression (RNA-seq) and chromatin accessibility (ATAC-seq) data into a unified representation. The workflow leverages state-of-the-art deep learning models and integrates tools from both the R (Seurat/Signac) and Python (Scanpy/scVI) ecosystems.
+```
+Raw FASTQ
+  │
+  ├─ cellranger count    (RNA)
+  ├─ cellranger-atac run (ATAC)
+  │
+  ▼
+workflows/rna/           QC, normalisation, HVG selection
+workflows/atac/          QC, peak merging, fragment export
+  │
+  ▼
+workflows/wnn/           scVI + PoissonVI + WNN clustering (Leiden)
+  │  → 04_muon_object.h5mu  (cell-type annotations)
+  │  → 02_anndata_object_rna.h5ad
+  │  → output/{sample}_fragments.bed
+  │
+  ▼
+workflows/generate_bigwig/   per-cell-type BAM → BigWig
+  │
+  ▼
+Results/rna/{celltype}.bw
+Results/atac/{celltype}.bw
+```
 
-**Key Features:**
-- Automated quality control using Gaussian Mixture Models (GMM)
+## Key Features
+
+- Automated QC using Gaussian Mixture Models (GMM)
 - Separate preprocessing pipelines for RNA and ATAC modalities
-- Deep learning-based feature extraction using scVI and PoissonVI
-- Multimodal integration via weighted-nearest neighbors (WNN)
-- GPU-accelerated model training
+- Deep learning feature extraction (scVI / PoissonVI)
+- Multimodal integration via WNN
+- **Auto-detection** of cell-type annotation column in the `.h5mu` file
+- Per-cell-type BigWig generation with `bamCoverage` (RPGC normalisation)
+- GPU-accelerated model training (multi-GPU supported)
 - Reproducible workflows managed by Snakemake
 
-**Prerequisites:**
-- Ambient RNA correction (SoupX or CellBender) should be applied before running the pipeline
-- Conda/Mamba for environment management
-- GPU resources for model training (optional but recommended)
+## Quick Start
 
-## Pipeline Architecture
+See [QUICKSTART.md](QUICKSTART.md) for a 5-step guide.  
+See [SETUP.md](SETUP.md) for detailed environment and reference genome setup.
 
-The workflow consists of three sequential stages:
+```bash
+# 1. Configure
+nano config/config.yaml    # set genome paths, env names, input paths
+nano config/samples.csv    # add sample IDs and FASTQ locations
 
-### 1. RNA Processing (`workflows/rna/`)
+# 2. Run upstream workflows
+snakemake --snakefile workflows/rna/snakefile  --use-conda --cores 8
+snakemake --snakefile workflows/atac/snakefile --use-conda --cores 8
+snakemake --snakefile workflows/wnn/snakefile  --use-conda --cores 8
 
-Processes single-cell RNA-seq data through quality control, filtering, and normalization:
-
-- **Preprocessing**: Loads raw count matrices and creates AnnData objects
-- **QC Filtering**: Applies GMM-based quality control on metrics including gene counts, UMI counts, mitochondrial/ribosomal percentages, and doublet scores
-- **Processing**: Normalizes, transforms, and selects highly variable genes
-- **Merging**: Combines filtered samples into a unified dataset
-
-**Output**: Filtered and normalized RNA count matrix ready for deep learning
-
-### 2. ATAC Processing (`workflows/atac/`)
-
-Processes single-cell ATAC-seq data using Signac for chromatin accessibility analysis:
-
-- **Preprocessing**: Creates ChromatinAssay objects from fragment files
-- **QC Filtering**: Filters cells based on ATAC-specific metrics (TSS enrichment, nucleosome signal, FRiP scores)
-- **Peak Calling**: Merges peaks across samples to create a unified peak set
-- **Quantification**: Rebuilds ATAC assay with merged peaks for consistent features
-- **Fragment Export**: Generates fragment files for downstream analysis
-
-**Output**: Peak count matrix and fragment files
-
-### 3. WNN Integration (`workflows/wnn/`)
-
-Integrates RNA and ATAC modalities using deep learning and WNN:
-
-- **Feature Filtering**: Selects informative features from each modality
-- **Model Training**: 
-  - Trains scVI model on RNA data (negative binomial distribution)
-  - Trains PoissonVI model on ATAC data (Poisson distribution)
-  - Hyperparameter optimization via autotuning
-- **Latent Representation**: Extracts low-dimensional embeddings from trained models
-- **WNN Integration**: Computes weighted-nearest neighbors across modalities
-- **Clustering & Visualization**: Performs Leiden clustering and UMAP projection
-
-**Output**: Integrated multimodal representation with cell clusters and visualizations
-
-## Methods
-
-### scVI (single-cell Variational Inference)
-
-scVI is a scalable probabilistic framework for analyzing scRNA-seq data using variational autoencoders. It provides:
-- Batch effect correction across samples
-- Dimensionality reduction with biologically interpretable latent spaces
-- Efficient processing of large datasets
-- Flexible modeling using negative binomial gene expression distributions
-
-**Paper**: [Lopez et al., Nature Methods 2018](https://www.nature.com/articles/s41592-018-0229-2)
-
-### PoissonVI
-
-PoissonVI extends the scVI framework specifically for scATAC-seq data. Unlike scVI, it models sparse, discrete peak accessibility counts using the Poisson distribution, which better captures the characteristics of chromatin accessibility data.
-
-**Paper**: [Martens et al., Nature Methods 2024](https://www.nature.com/articles/s41592-023-02112-6)
-
-### WNN (Weighted Nearest Neighbors)
-
-WNN, implemented via the muon framework, integrates multiple single-cell modalities by computing separate nearest neighbor graphs for each data type and weighting them based on each modality's contribution to cellular identity. This enables:
-- Robust multimodal integration
-- Improved cell type annotation
-- Complementary information capture from gene expression and chromatin accessibility
-
-**Paper**: [Hao et al., Cell 2021](https://www.sciencedirect.com/science/article/pii/S0092867421005833)
+# 3. Generate BigWig files (cell types detected automatically)
+snakemake --snakefile workflows/generate_bigwig/snakefile --use-conda --cores 8
+```
 
 ## Requirements
 
-- **Snakemake**: Workflow management
-- **Conda/Mamba**: Environment management (environments defined in `envs/` directories)
-- **Python packages**: scvi-tools, scanpy, muon, pytorch
-- **R packages**: Seurat, Signac, Seuratdisk
-- **Hardware**: GPU recommended for model training (supports multi-GPU)
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Snakemake | ≥ 7 | `snakemake_env` conda env |
+| Cell Ranger | ≥ 10 | RNA processing |
+| Cell Ranger ATAC | ≥ 2.2 | ATAC processing |
+| Python | 3.8+ | `pytorch` conda env |
+| scanpy / scvi-tools / muon / anndata / pysam | latest | in `pytorch` env |
+| R / Seurat / Signac | latest | `R` conda env |
+| deeptools / samtools | latest | `base-omics` conda env |
+| GPU | optional | recommended for model training |
 
-## Usage
+## Pipeline Stages
 
-```bash
-# Run the full pipeline (all three stages)
-snakemake --use-conda --cores all
+### 1. RNA Processing (`workflows/rna/`)
 
-# Run individual workflows
-snakemake --snakefile workflows/rna/snakefile --use-conda
-snakemake --snakefile workflows/atac/snakefile --use-conda
-snakemake --snakefile workflows/wnn/snakefile --use-conda
-```
+- Loads raw count matrices → AnnData objects
+- GMM-based QC (gene counts, UMIs, MT%, doublets)
+- Normalisation, log-transformation, HVG selection
+- Merges samples → unified dataset
+
+**Output**: `workflows/rna/objects/…`
+
+### 2. ATAC Processing (`workflows/atac/`)
+
+- Creates ChromatinAssay objects from fragment files
+- ATAC-specific QC (TSS enrichment, nucleosome signal, FRiP)
+- Merges peaks across samples
+- Exports per-sample fragment BED files
+
+**Output**: `workflows/atac/output/{sample_id}_fragments.bed`
+
+### 3. WNN Integration (`workflows/wnn/`)
+
+- Trains scVI (RNA) and PoissonVI (ATAC) models
+- Hyperparameter optimisation via Ray Tune
+- Computes WNN graph and Leiden clustering
+- UMAP visualisation
+
+**Output**: `workflows/wnn/objects/04_muon_object.h5mu`
+
+### 4. BigWig Generation (`workflows/generate_bigwig/`)
+
+- **Auto-detects** cell-type column from the `.h5mu` object  
+  (supports `cell_type`, `celltype`, `annotation`, `leiden_celltype`, `leiden`)
+- Extracts RNA and ATAC barcodes per cell type
+- Converts RNA count matrix → coordinate-sorted BAM
+- Converts ATAC fragment records → coordinate-sorted BAM
+- Runs `bamCoverage` (deeptools) to produce RPGC-normalised BigWig files
+
+**Output**: `Results/rna/{celltype}.bw`, `Results/atac/{celltype}.bw`
+
+## Configuration
+
+All pipeline parameters live in `config/`:
+
+| File | Purpose |
+|------|---------|
+| `config/config.yaml` | Reference genomes, conda env names, input/output paths, BigWig params |
+| `config/samples.csv` | Single source of truth for sample metadata |
+| `config/README_CONFIG.md` | Detailed documentation for every config option |
 
 ## Project Structure
 
 ```
 scvi-multiome/
+├── config/
+│   ├── config.yaml           # Main configuration
+│   ├── samples.csv           # Sample metadata
+│   └── README_CONFIG.md      # Config documentation
 ├── workflows/
-│   ├── rna/              # RNA-seq processing pipeline
-│   ├── atac/             # ATAC-seq processing pipeline
-│   ├── wnn/              # Multimodal integration pipeline
-│   ├── celloracle/       # (Future: gene regulatory network inference)
-│   └── topics/           # (Future: topic modeling)
+│   ├── rna/                  # RNA QC & processing
+│   ├── atac/                 # ATAC QC & processing
+│   ├── wnn/                  # Multimodal integration
+│   ├── generate_bigwig/      # BigWig generation
+│   │   ├── snakefile
+│   │   └── scripts/
+│   │       ├── get_celltypes.py
+│   │       ├── extract_cells_by_type.py
+│   │       ├── counts_to_bam.py
+│   │       └── fragments_to_bam.py
+│   ├── celloracle/           # (Future: GRN inference)
+│   └── topics/               # (Future: topic modelling)
+├── Results/
+│   ├── rna/                  # Per-cell-type RNA BigWig files
+│   └── atac/                 # Per-cell-type ATAC BigWig files
+├── SETUP.md
+├── QUICKSTART.md
 └── README.md
 ```
 
+## Methods
+
+### scVI
+
+Scalable probabilistic framework for scRNA-seq using variational autoencoders.  
+**Paper**: [Lopez et al., Nature Methods 2018](https://www.nature.com/articles/s41592-018-0229-2)
+
+### PoissonVI
+
+Extension of scVI for scATAC-seq (Poisson distribution for sparse peaks).  
+**Paper**: [Martens et al., Nature Methods 2024](https://www.nature.com/articles/s41592-023-02112-6)
+
+### WNN
+
+Multimodal integration via weighted nearest neighbours, implemented in muon.  
+**Paper**: [Hao et al., Cell 2021](https://www.sciencedirect.com/science/article/pii/S0092867421005833)
+
 ## Citation
 
-If you use this pipeline, please cite the relevant papers for scVI, PoissonVI, and WNN listed above.
+If you use this pipeline, please cite the relevant papers for scVI, PoissonVI,
+and WNN listed above.
 
 ## License
 
-See LICENSE file for details.
+See [LICENSE](LICENSE) for details.

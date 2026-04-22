@@ -1,0 +1,256 @@
+# =============================================================================
+# workflows/generate_bigwig/snakefile
+# =============================================================================
+# Generate per-cell-type BigWig files for both RNA and ATAC modalities from
+# the WNN clustering output produced by workflows/wnn/.
+#
+# Usage
+# -----
+#   cd <repo_root>
+#   snakemake --snakefile workflows/generate_bigwig/snakefile \
+#             --use-conda --cores 8
+#
+# Dependencies
+# ------------
+#   All conda environments referenced here must already be installed.
+#   See SETUP.md for instructions.
+#
+# Outputs
+# -------
+#   Results/rna/{celltype}.bw
+#   Results/atac/{celltype}.bw
+#   Intermediate BAM files in workflows/generate_bigwig/intermediate/
+# =============================================================================
+
+import os
+import yaml
+import pandas
+
+# ---------------------------------------------------------------------------
+# Load configuration
+# ---------------------------------------------------------------------------
+
+CONFIG_PATH = "config/config.yaml"
+
+with open(CONFIG_PATH) as _fh:
+    cfg = yaml.safe_load(_fh)
+
+# Active reference genome
+_genome_name = cfg["reference_genome"]
+_genome = cfg["genomes"][_genome_name]
+
+CHROM_SIZES = _genome["chrom_sizes"]
+GTF         = _genome.get("gtf", "")
+FASTA       = _genome.get("fasta", "")
+
+# Conda environment names (not .yml paths)
+ENVS = cfg["envs"]
+
+# Paths to WNN / upstream outputs
+MUON_OBJECT        = cfg["wnn_muon_object"]
+RNA_ANNDATA        = cfg["rna_anndata"]
+ATAC_FRAG_TEMPLATE = cfg["atac_fragments_template"]
+
+# Cell-type column hint (None → auto-detect)
+CELLTYPE_COLUMN = cfg.get("celltype_column") or ""
+
+# BigWig parameters
+BW_NORM    = cfg["bigwig"]["normalization"]
+BW_BINSIZE = cfg["bigwig"]["bin_size"]
+BW_MINMQ   = cfg["bigwig"]["min_mapping_quality"]
+BW_EXTRA   = cfg["bigwig"].get("extra_bamcoverage_params", "")
+
+# Output directories
+OUT_RNA  = cfg["output"]["rna_bigwig"]
+OUT_ATAC = cfg["output"]["atac_bigwig"]
+INTER    = cfg["output"]["intermediate"]
+
+# ---------------------------------------------------------------------------
+# Sample information
+# ---------------------------------------------------------------------------
+
+samples = pandas.read_csv(cfg["samples_csv"])
+ATAC_SAMPLES = samples.loc[samples["modality"] == "atac", "sample_id"].tolist()
+
+# ---------------------------------------------------------------------------
+# Checkpoint: detect cell types dynamically from the h5mu
+# ---------------------------------------------------------------------------
+
+checkpoint get_celltypes:
+    input:
+        muon_object=MUON_OBJECT
+    output:
+        celltypes=f"{INTER}/celltypes.txt"
+    params:
+        celltype_column=CELLTYPE_COLUMN
+    conda:
+        ENVS["python"]
+    script:
+        "scripts/get_celltypes.py"
+
+
+def read_celltypes(wildcards):
+    """Called after the checkpoint; returns the list of cell types."""
+    ct_file = checkpoints.get_celltypes.get(**wildcards).output.celltypes
+    with open(ct_file) as fh:
+        return [line.strip() for line in fh if line.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Rule: all  — aggregate all BigWig files
+# ---------------------------------------------------------------------------
+
+def all_bigwigs(wildcards):
+    celltypes = read_celltypes(wildcards)
+    return (
+        expand(f"{OUT_RNA}/{{celltype}}.bw",  celltype=celltypes)
+        + expand(f"{OUT_ATAC}/{{celltype}}.bw", celltype=celltypes)
+    )
+
+
+localrules: all
+
+rule all:
+    input:
+        all_bigwigs
+
+
+# ---------------------------------------------------------------------------
+# RNA branch
+# ---------------------------------------------------------------------------
+
+rule extract_rna_barcodes:
+    input:
+        muon_object=MUON_OBJECT
+    output:
+        barcodes=f"{INTER}/rna/{{celltype}}_barcodes.txt"
+    params:
+        celltype="{celltype}",
+        modality="rna",
+        celltype_column=CELLTYPE_COLUMN
+    conda:
+        ENVS["python"]
+    script:
+        "scripts/extract_cells_by_type.py"
+
+
+rule rna_counts_to_bam:
+    input:
+        anndata=RNA_ANNDATA,
+        barcodes=f"{INTER}/rna/{{celltype}}_barcodes.txt"
+    output:
+        bam=f"{INTER}/rna/{{celltype}}.sorted.bam",
+        bai=f"{INTER}/rna/{{celltype}}.sorted.bam.bai"
+    params:
+        chrom_sizes=CHROM_SIZES,
+        gtf=GTF,
+        read_length=100
+    conda:
+        ENVS["python"]
+    script:
+        "scripts/counts_to_bam.py"
+
+
+rule rna_bam_to_bigwig:
+    input:
+        bam=f"{INTER}/rna/{{celltype}}.sorted.bam",
+        bai=f"{INTER}/rna/{{celltype}}.sorted.bam.bai"
+    output:
+        bw=f"{OUT_RNA}/{{celltype}}.bw"
+    params:
+        norm=BW_NORM,
+        binsize=BW_BINSIZE,
+        minmq=BW_MINMQ,
+        chrom_sizes=CHROM_SIZES,
+        extra=BW_EXTRA
+    conda:
+        ENVS["bigwig"]
+    threads:
+        4
+    shell:
+        """
+        bamCoverage \
+            --bam {input.bam} \
+            --outFileName {output.bw} \
+            --outFileFormat bigwig \
+            --binSize {params.binsize} \
+            --normalizeUsing {params.norm} \
+            --effectiveGenomeSize $(awk '{{sum+=$2}} END{{print sum}}' {params.chrom_sizes}) \
+            --minMappingQuality {params.minmq} \
+            --numberOfProcessors {threads} \
+            {params.extra}
+        """
+
+
+# ---------------------------------------------------------------------------
+# ATAC branch
+# ---------------------------------------------------------------------------
+
+def atac_fragments_input(wildcards):
+    """Return fragment BED paths for all ATAC samples."""
+    return [
+        ATAC_FRAG_TEMPLATE.format(sample_id=sid)
+        for sid in ATAC_SAMPLES
+    ]
+
+
+rule extract_atac_barcodes:
+    input:
+        muon_object=MUON_OBJECT
+    output:
+        barcodes=f"{INTER}/atac/{{celltype}}_barcodes.txt"
+    params:
+        celltype="{celltype}",
+        modality="atac",
+        celltype_column=CELLTYPE_COLUMN
+    conda:
+        ENVS["python"]
+    script:
+        "scripts/extract_cells_by_type.py"
+
+
+rule atac_fragments_to_bam:
+    input:
+        fragments=atac_fragments_input,
+        barcodes=f"{INTER}/atac/{{celltype}}_barcodes.txt"
+    output:
+        bam=f"{INTER}/atac/{{celltype}}.sorted.bam",
+        bai=f"{INTER}/atac/{{celltype}}.sorted.bam.bai"
+    params:
+        chrom_sizes=CHROM_SIZES,
+        read_length=50
+    conda:
+        ENVS["python"]
+    script:
+        "scripts/fragments_to_bam.py"
+
+
+rule atac_bam_to_bigwig:
+    input:
+        bam=f"{INTER}/atac/{{celltype}}.sorted.bam",
+        bai=f"{INTER}/atac/{{celltype}}.sorted.bam.bai"
+    output:
+        bw=f"{OUT_ATAC}/{{celltype}}.bw"
+    params:
+        norm=BW_NORM,
+        binsize=BW_BINSIZE,
+        minmq=BW_MINMQ,
+        chrom_sizes=CHROM_SIZES,
+        extra=BW_EXTRA
+    conda:
+        ENVS["bigwig"]
+    threads:
+        4
+    shell:
+        """
+        bamCoverage \
+            --bam {input.bam} \
+            --outFileName {output.bw} \
+            --outFileFormat bigwig \
+            --binSize {params.binsize} \
+            --normalizeUsing {params.norm} \
+            --effectiveGenomeSize $(awk '{{sum+=$2}} END{{print sum}}' {params.chrom_sizes}) \
+            --minMappingQuality {params.minmq} \
+            --numberOfProcessors {threads} \
+            {params.extra}
+        """

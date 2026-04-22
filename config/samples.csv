@@ -1,0 +1,4 @@
+sample_id,modality,organism,stage,fastq_dir,description
+GF13_1,rna,mouse,E13.5,/path/to/fastqs/rna,"Female E13.5 gonad - RNA (forward read: scRNA_5exp_GF13_1_f1.fastq.gz)"
+GM13_1,rna,mouse,E13.5,/path/to/fastqs/rna,"Male E13.5 gonad - RNA (forward read: scRNA_5exp_GM13_1_f1.fastq.gz)"
+E13_5_Gonad_female_S1_L003,atac,mouse,E13.5,/path/to/fastqs/atac,"Female E13.5 gonad - ATAC (scATAC_E13.5_Gonad-female_S1_L003_R[123]_001.fastq.gz)"
